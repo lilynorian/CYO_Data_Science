@@ -1,0 +1,210 @@
+---
+title: "CYO Capstone"
+author: "Lily Norian"
+date: "3/3/2022"
+output: pdf_document
+---
+
+This is my report for the Capstone CYO Project
+
+###Introduction
+In this project, I will be using the "Crimes in Chicago" dataset offered by kaggle. Specifically, I will be using the 2012-2017 dataset. This dataset includes data for crimes reported in the city of Chicago during these years. The data includes a lot of important variables and information. However, for the purpose of my analysis, we will focus on District, Primary.Type, Location.Description, and Arrest These are explained below. It is also important to note that each incident is assigned a unique identifier which is in the ID column.
+
+District- the Chicago police district where the crime happened
+Primary.Type- the primary description of the crime according to the Illinois Uniform Crime Reporting code
+Location.Description- describes the location of where the crime occurred
+Arrest- True or False value depending on if an arrest was made
+
+The goal of this project is to understand the relationship between these different variables as they relate to crime in Chicago. This will tell us the safest districts of Chicago, the most common crimes, and predict if an arrest will be made for a crime.
+
+```{r,include=FALSE}
+if (!require(tidyverse)) install.packages('tidyverse')
+if (!require(ggplot2)) install.packages('ggplot2')
+if (!require(caret)) install.packages('caret')
+if (!require(cluster)) install.packages('cluster')
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(cluster)
+```
+
+###Methods/Analysis
+After loading the data, I began my exploration. To start, I wanted to familiarize myself with the data. To accomplish this, I found the frequency of the different districts, crime types, and unique idenitifiers to ensure that there was no repetition. These values are shown below:
+```{r,include=FALSE}
+path<-"/Users/lilynorian/Desktop/Chicago_Crimes_2012_to_2017.csv"
+dta<-read.csv(path)
+```
+```{r,echo=FALSE}
+type_summary<-count(dta,Primary.Type)
+dta%>% summarize(n_ID=n_distinct(ID),
+                 n_Primary.Type=n_distinct(Primary.Type),
+                 n_District=n_distinct(District))
+```
+```{r,include=FALSE}
+dta<-dta[,1:16] 
+```
+There were a couple columns that I deemed unnecessary for my analysis like the longitude and latitude and others that I removed from the data for future analysis. I removed any NAs and duplicates to clean the data. Then, I made a series of plots to show frequencies and relationships between variables.
+
+The first plots show the frequencies of crime types and crimes in districts. These graphs as seen below show that theft is the most common crime and battery is the second most common. We can also see that district 11 had the most crimes reported. This gives us a better understanding of the data and crime environment in Chicago.
+```{r,echo=FALSE}
+ggplot(type_summary,aes(x=n,y=Primary.Type))+geom_bar(stat="identity")+ ggtitle("Primary.Type Frequency") #plot the frequency of each crime primary type
+district_summary<-count(dta,District)
+ggplot(district_summary,aes(x=District,y=n))+geom_bar(stat="identity")+ggtitle("Frequency of Crimes by District") 
+```
+```{r,include=FALSE}
+dta<-na.omit(dta)
+dta<-dta%>%distinct(ID,.keep_all=TRUE)
+df<-data.frame(table(dta$Primary.Type,dta$District,dta$Location.Description))
+colnames(df)<-c('Primary.Type','District','Location.Description','Freq')
+```
+
+I then made plots that show the frequency of one variable given another variable. I found these plots difficult to read and not particularly helpful in my analysis so I am omitting them from this report.
+
+Since I decided to focus on the arrest rates from the dataset, I plotted the relationship between district and primary tyoes and the arrest rates. The most useful relationship I found was that between the district and arrest rates. This plot is shown below.
+```{r,echo=FALSE}
+dta%>%group_by(District)%>%
+  summarize(p=mean(Arrest=='True'))%>%
+  ggplot(aes(x=District,y=p))+
+  geom_point() + ggtitle("Arrest Rates by District") 
+```
+
+For my actual analysis, I wanted to use k-means clustering to find group districts and crime types together by their arrest rates. I began by clustering by primary type. The cluster plot can be seen below for this analysis:
+```{r,echo=FALSE}
+y<-dta%>%group_by(Primary.Type,Arrest)%>%
+  summarize(n=n())%>%
+  spread(Arrest,n)
+y<-y[,-1]%>%as.matrix()
+y<-sweep(y,2,colMeans(y,na.rm=TRUE))
+y<-sweep(y,1,rowMeans(y,na.rm=TRUE))
+y_0<-y
+y_0[is.na(y_0)]<-0
+ky<-kmeans(y_0,centers=2,nstart=25)
+z2<-data.frame(y_0,ky$cluster)
+clusplot(z2,ky$cluster,color=TRUE,shade=F,labels=0,lines=0,main='k-Means Cluster Analysis-Primary.Type')
+```
+
+Then, to simplify analysis I decided to focus on the top 10 crime types as these are the most common crimes that are reported in the city of Chicago and still has the potential to tell us a lot of useful information about crime in Chicago.
+```{r,include=FALSE}
+topCrimes<-dta%>%group_by(Primary.Type)%>%
+  summarize(n=n())%>%
+  arrange(desc(n))%>%
+  top_n(10)%>%
+  pull(Primary.Type)
+```
+
+I then performed a k-means clustering analysis on the districts and arrest rates only for the incident reported that were part of the top 10 crime types. This clustering plot can be seen below:
+```{r,echo=FALSE}
+arrests <- dta %>% 
+  filter(Primary.Type %in% topCrimes) %>%
+  group_by(District,Arrest) %>%
+  summarize(n=n())%>%
+  spread(Arrest,n)
+arrests<-arrests[,-1]%>%as.matrix()
+arrests<-sweep(arrests,2,colMeans(arrests,na.rm=TRUE))
+arrests<-sweep(arrests,1,rowMeans(arrests,na.rm=TRUE))
+arrests_0<-arrests
+arrests_0[is.na(arrests_0)]<-0
+karrests<-kmeans(arrests_0,centers=2,nstart=25)
+z3<-data.frame(arrests_0,karrests$cluster)
+clusplot(z3,karrests$cluster,color=TRUE,shade=F,labels=0,lines=0,main='k-Means Cluster Analysis')
+```
+
+For the second part of my analysis, I wanted to predict whether or not an arrest would be made for a crime reported in Chicago. To accomplish this, I performed a regression analysis. I split the dataset into train and test sets with a 80:20 ratio as this is a standard starting point and I assume it will capture most of the variance in my model. My final model used district, crime primary type, and location to predict if an arrest would be made for the associated crime. I decided to use these variables as I could see in the k-means clustering that the different districts, types, and locations could be grouped together in terms of their arrest rates.
+```{r,include=FALSE}
+#create test and train set
+set.seed(755)
+test_index <- createDataPartition(y = dta$Arrest, times = 1, p = 0.2, 
+                                  list = FALSE)
+train_set <- dta[-test_index,]
+test_set <- dta[test_index,]
+#remove districts and crime types in the test set that do not appear in training set
+test_set <- test_set %>% 
+  semi_join(train_set, by = "District") %>%
+  semi_join(train_set, by = "Primary.Type")
+
+#show relationship between district and arrest rates
+dta %>% 
+  filter(Primary.Type %in% topCrimes)%>%
+  group_by(District) %>%
+  summarize(prop = mean(Arrest == "True")) %>%
+  ggplot(aes(District, prop)) +
+  geom_point() 
+
+#equate the Arrest variable to binary 
+train_set <- train_set %>% 
+  filter(Primary.Type %in% topCrimes)%>%
+  mutate(outcome= as.numeric(Arrest == "True"))
+
+test_set<-test_set%>%
+  filter(Primary.Type %in% topCrimes)%>%
+  mutate(outcome = as.numeric(Arrest == "True"))
+  
+#predictions of arrests using just the average
+mu<-mean(train_set$outcome)
+
+RMSE <- function(true_outcome, predicted_outcome){
+  sqrt(mean((true_outcome - predicted_outcome)^2))
+}
+
+naive_rmse <- RMSE(test_set$outcome, mu)
+naive_rmse
+
+#predictions using the average and average by district
+district_avg<-train_set%>%
+  group_by(District)%>%
+  summarize(b_i = mean(outcome - mu))
+predicted_outcome1 <- mu + test_set %>% 
+  left_join(district_avg, by='District') %>%
+  pull(b_i)
+RMSE(predicted_outcome1, test_set$outcome)
+
+#predictions using the average, average by district, and average by primary type
+type_avg<-train_set%>%
+  left_join(district_avg,by='District')%>%
+  group_by(Primary.Type)%>%
+  summarize(b_u=mean(outcome-mu-b_i))
+predicted_outcome2 <- test_set %>% 
+  left_join(district_avg, by='District') %>%
+  left_join(type_avg, by='Primary.Type') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+RMSE(predicted_outcome2, test_set$outcome)
+
+#explore relationship between location and arrest rates
+dta%>%group_by(Location.Description)%>%
+  summarise(p=mean(Arrest=="True"))%>%
+  ggplot(aes(Location.Description,p))+
+  geom_point()
+
+#predictions using average, average by district, by type, and by location
+location_avg<-train_set%>%
+  left_join(district_avg,by='District')%>%
+  left_join(type_avg,by='Primary.Type')%>%
+  group_by(Location.Description)%>%
+  summarize(b_p=mean(outcome-mu-b_i-b_u))
+predicted_outcome3 <- test_set %>% 
+  left_join(district_avg, by='District') %>%
+  left_join(type_avg, by='Primary.Type') %>%
+  left_join(location_avg,by='Location.Description')%>%
+  mutate(pred = mu + b_i + b_u + b_p) %>%
+  pull(pred)
+RMSE(predicted_outcome3, test_set$outcome)
+
+```
+
+###Results
+The k-means clustering algorithms, allow us to group together districts and crime types by the rate that arrests are made for these crimes. Through this analysis, I learned that battery, theft, and criminal damage are grouped together for low arrest rates. However, these are the three most common crime types so it makes sense that the rate of arrests is lower than the others because of the frequency of these crimes. My second k-means algorithm essentially groups together the districts by arrest rates for the top 10 crime types. This algorithm gives us a sense of the likelihood of an arrest being made for one of the top 10 crimes in the different districts of Chicago. It is more likely for an arrest to be made in districts 10, 11, 15, 17, 20, 21, 22, and 24. My regression model had an RMSE or 0.32 which was considerably lower than the RMSE of my first model using only the mean arrest rates. Each variable that I added into the model, lowered the RMSE which tells me that my model somewhat accurately predicts the probability of an arrest being made. The variables that I analyzed, do in fact impact the probability of an arrest being made for a crime reported in the city of Chicago.
+
+###Conclusion
+Overall, I would say that I am happy with what I accomplished in this project. I think that the way I chose to analyze the dataset, taught me a lot about the data and I believe that you can see the progression of my analysis throughout my work. However, I think that there is a lot more that could be done. For example, I was not confident using the k-means clustering algorithm and I think that more could be done with it. I think that more could be learned about the data by potentially looking at the time of the crime. This might also be a useful variable to include in the regression analysis to more accurately predict if an arrest will be made. Also, I would like to point out that even though the RMSE for my regression analysis is rather low, since I am only predicting "True" or "False," I would like this number to be even lower. Adding in an analysis of the time that the crime was committed may help in this. 
+
+
+
+
+
+
+
+
+
+
+
